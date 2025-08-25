@@ -4,62 +4,62 @@ from dataclasses import dataclass, field
 import logging
 from pathlib import Path
 from typing import Optional
-from buttercup.common.maps import BuildMap
+from nats.js.client import JetStreamContext
+from buttercup.common.nats_datastructures import NatsBuildMap, NatsTaskRegistry
 from buttercup.common.challenge_task import ChallengeTask
-from buttercup.common.datastructures.msg_pb2 import BuildType, BuildOutput, POVReproduceRequest
-from buttercup.common.sets import PoVReproduceStatus
-from buttercup.common.task_registry import TaskRegistry
+from buttercup.common.datastructures.msg_pb2 import BuildType, BuildOutput, POVReproduceRequest, POVReproduceResponse
+from buttercup.common.nats_queues import NatsQueue, NatsQueueFactory, QueueNames, GroupNames
 import buttercup.common.node_local as node_local
-
-from redis import Redis
-from buttercup.common.utils import serve_loop
+from buttercup.common.utils import serve_loop_async
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class POVReproducer:
-    redis: Redis
+    jetstream: JetStreamContext
     sleep_time: float = 0.1
     max_retries: int = 10
 
-    pov_status: PoVReproduceStatus = field(init=False)
-    registry: TaskRegistry = field(init=False)
+    request_queue: NatsQueue[POVReproduceRequest] = field(init=False)
+    response_queue: NatsQueue[POVReproduceResponse] = field(init=False)
+    build_map: NatsBuildMap = field(init=False)
+    registry: NatsTaskRegistry = field(init=False)
 
-    def __post_init__(self) -> None:
-        self.pov_status = PoVReproduceStatus(self.redis)
-        self.registry = TaskRegistry(self.redis)
+    async def __post_init__(self):
+        queue_factory = NatsQueueFactory(self.jetstream.client, self.jetstream)
+        self.request_queue = queue_factory.create(QueueNames.POV_REPRODUCER_REQUESTS, GroupNames.ORCHESTRATOR)
+        await self.request_queue.__post_init__()
+        self.response_queue = queue_factory.create(QueueNames.POV_REPRODUCER_RESPONSES)
+        await self.response_queue.__post_init__()
+        self.build_map = NatsBuildMap(self.jetstream)
+        self.registry = NatsTaskRegistry(self.jetstream)
 
-    def serve_item(self) -> bool:
-        entry: Optional[POVReproduceRequest] = self.pov_status.get_one_pending()
-        if entry is None:
+    async def serve_item(self) -> bool:
+        item = await self.request_queue.pop()
+        if item is None:
             return False
 
+        entry = item.deserialized
         task_id: str = entry.task_id
         internal_patch_id: str = entry.internal_patch_id
         pov_path: str = entry.pov_path
         sanitizer: str = entry.sanitizer
         harness_name: str = entry.harness_name
 
-        if self.registry.should_stop_processing(task_id):
+        if await self.registry.should_stop_processing(task_id):
             logger.info("Task %s is cancelled or expired, will not reproduce POV.", task_id)
-            was_marked = self.pov_status.mark_expired(entry)
-            if not was_marked:
-                logger.debug(
-                    "Failed to mark POV as expired for task %s - item was not in pending state (another worker might have marked it)",
-                    task_id,
-                )
+            await self.request_queue.ack_item(item)
             return False
 
         logger.info(f"Reproducing POV for {task_id} | {harness_name} | {pov_path}")
 
-        builds = BuildMap(self.redis)
-        build_output_with_patch: Optional[BuildOutput] = builds.get_build_from_san(
-            task_id,
-            BuildType.PATCH,
-            sanitizer,
-            internal_patch_id,
+        builds = await self.build_map.get_builds(task_id, BuildType.PATCH)
+        build_output_with_patch: Optional[BuildOutput] = next(
+            (b for b in builds if b.sanitizer == sanitizer and b.internal_patch_id == internal_patch_id),
+            None,
         )
+
         if build_output_with_patch is None:
             logger.warning(
                 "No patched build output found for task %s. Will retry later.",
@@ -86,23 +86,16 @@ class POVReproducer:
                 task_id,
             )
             logger.info(f"POV {pov_path} for task: {task_id} crashed: {info.did_crash()}")
-            if info.did_crash():
-                was_marked = self.pov_status.mark_non_mitigated(entry)
-                if not was_marked:
-                    logger.debug(
-                        "Failed to mark POV as non-mitigated for task %s - item was not in pending state (another worker might have marked it)",
-                        task_id,
-                    )
-            else:
-                was_marked = self.pov_status.mark_mitigated(entry)
-                if not was_marked:
-                    logger.debug(
-                        "Failed to mark POV as mitigated for task %s - item was not in pending state (another worker might have marked it)",
-                        task_id,
-                    )
+
+            response = POVReproduceResponse(
+                request=entry,
+                did_crash=info.did_crash(),
+            )
+            await self.response_queue.push(response)
+            await self.request_queue.ack_item(item)
 
         return True
 
-    def serve(self) -> None:
+    async def serve(self) -> None:
         logger.info("Starting POV Reproducer")
-        serve_loop(self.serve_item, self.sleep_time)
+        await serve_loop_async(self.serve_item, self.sleep_time)

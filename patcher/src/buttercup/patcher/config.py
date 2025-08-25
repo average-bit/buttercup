@@ -7,7 +7,7 @@ from pathlib import Path
 
 class ServeCommand(BaseModel):
     sleep_time: Annotated[float, Field(default=1.0, description="Sleep time between checks in seconds")]
-    redis_url: Annotated[str, Field(default="redis://localhost:6379", description="Redis URL")]
+    nats_url: Annotated[str, Field(default="nats://localhost:4222", description="NATS URL")]
 
 
 class ProcessCommand(BaseModel):
@@ -23,7 +23,7 @@ class ProcessCommand(BaseModel):
 
 class ProcessMsgCommand(BaseModel):
     msg_path: CliPositionalArg[Path] = Field(description="Path to the confirmed vulnerability proto file")
-    redis_url: Annotated[str, Field(default="redis://localhost:6379", description="Redis URL")]
+    nats_url: Annotated[str, Field(default="nats://localhost:4222", description="NATS URL")]
 
 
 class Settings(BaseSettings):

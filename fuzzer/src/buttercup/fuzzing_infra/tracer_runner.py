@@ -1,10 +1,10 @@
-from buttercup.common.maps import BuildMap
+from buttercup.common.nats_datastructures import NatsBuildMap
 from buttercup.common.challenge_task import ChallengeTask, ReproduceResult
 from buttercup.common.datastructures.msg_pb2 import BuildType
 from pathlib import Path
 from dataclasses import dataclass
 import logging
-from redis import Redis
+from nats.js.client import JetStreamContext
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from buttercup.common.telemetry import set_crs_attributes, CRSActionCategory
@@ -19,10 +19,10 @@ class TracerInfo:
 
 
 class TracerRunner:
-    def __init__(self, tsk_id: str, wdir: str, redis: Redis) -> None:
+    def __init__(self, tsk_id: str, wdir: str, jetstream: JetStreamContext) -> None:
         self.tsk_id = tsk_id
         self.wdir = wdir
-        self.redis = redis
+        self.jetstream = jetstream
 
     def _create_tracer_info(self, info: ReproduceResult) -> TracerInfo:
         crashed = info.did_crash()
@@ -31,23 +31,27 @@ class TracerRunner:
             stacktrace=info.stacktrace() if crashed else None,
         )
 
-    def run(self, harness_name: str, crash_path: Path, sanitizer: str) -> TracerInfo | None:
-        builds = BuildMap(self.redis)
-        build_output_with_diff = builds.get_build_from_san(self.tsk_id, BuildType.FUZZER, sanitizer)
+    async def run(self, harness_name: str, crash_path: Path, sanitizer: str) -> TracerInfo | None:
+        builds = NatsBuildMap(self.jetstream)
+        fuzzer_builds = await builds.get_builds(self.tsk_id, BuildType.FUZZER)
+        build_output_with_diff = next((b for b in fuzzer_builds if b.sanitizer == sanitizer), None)
+
         if build_output_with_diff is None:
             logger.warning("No tracer build output found for task %s", self.tsk_id)
             return None
 
         diff_task = ChallengeTask(read_only_task_dir=build_output_with_diff.task_dir)
         is_diff_mode = len(diff_task.get_diffs()) > 0
-        build_output_no_diffs = builds.get_build_from_san(self.tsk_id, BuildType.TRACER_NO_DIFF, sanitizer)
+
+        tracer_builds = await builds.get_builds(self.tsk_id, BuildType.TRACER_NO_DIFF)
+        build_output_no_diffs = next((b for b in tracer_builds if b.sanitizer == sanitizer), None)
+
         if is_diff_mode and build_output_no_diffs is None:
             logger.warning("No tracer no diff build output found for task %s", self.tsk_id)
             return None
 
         logger.info("Checking if task %s crashed", self.tsk_id)
         with diff_task.get_rw_copy(work_dir=self.wdir) as local_diff_task:
-            # log telemetry
             tracer = trace.get_tracer(__name__)
             with tracer.start_as_current_span("reproduce_pov") as span:
                 set_crs_attributes(
@@ -84,7 +88,6 @@ class TracerRunner:
         no_diff_task = ChallengeTask(read_only_task_dir=build_output_no_diffs.task_dir)
 
         with no_diff_task.get_rw_copy(work_dir=self.wdir) as local_no_diff_task:
-            # log telemetry
             tracer = trace.get_tracer(__name__)
             with tracer.start_as_current_span("reproduce_pov_no_diff") as span:
                 set_crs_attributes(

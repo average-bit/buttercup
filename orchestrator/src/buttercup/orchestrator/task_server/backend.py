@@ -13,11 +13,10 @@ from buttercup.common.datastructures.msg_pb2 import (
     TaskDelete,
     TaskDownload,
 )
-from buttercup.common.queues import ReliableQueue
-from buttercup.common.sarif_store import SARIFStore
-from buttercup.common.task_registry import TaskRegistry
-from redis import Redis
+from buttercup.common.nats_queues import NatsQueue
+from buttercup.common.nats_datastructures import NatsSARIFStore, NatsTaskRegistry
 import logging
+from nats.js.client import JetStreamContext
 
 
 logger = logging.getLogger(__name__)
@@ -52,13 +51,12 @@ def _api_task_to_proto(task: Task) -> list[TaskProto]:
                 case SourceType.SourceTypeDiff:
                     source_detail.source_type = SourceDetailProto.SourceType.SOURCE_TYPE_DIFF
                 case _:
-                    logger.warning(f"Unknown source type: {source.source_type}")  # type: ignore[unreachable]
+                    logger.warning(f"Unknown source type: {source.source_type}")
+
             source_detail.url = source.url
 
-        # Convert deadline from milliseconds to seconds (we don't need the precision)
         task_proto.deadline = task_detail.deadline // 1000
 
-        # Populate metadata field
         for key, value in task_detail.metadata.items():
             task_proto.metadata[key] = str(value)
 
@@ -67,73 +65,39 @@ def _api_task_to_proto(task: Task) -> list[TaskProto]:
     return res
 
 
-def new_task(task: Task, tasks_queue: ReliableQueue) -> str:
+async def new_task(task: Task, tasks_queue: NatsQueue) -> str:
     for task_proto in _api_task_to_proto(task):
         task_download = TaskDownload(task=task_proto)
-        tasks_queue.push(task_download)
+        await tasks_queue.push(task_download)
         logger.info(f"New task: {task_proto}")
 
     return "DONE"
 
 
-def delete_task(task_id: UUID, delete_task_queue: ReliableQueue) -> str:
-    """
-    Delete a task by pushing a delete request to the task deletion queue.
-
-    Args:
-        task_id: The unique identifier of the task to delete
-        delete_task_queue: Queue for processing task deletion requests
-
-    Returns:
-        Empty string on successful deletion request
-    """
+async def delete_task(task_id: UUID, delete_task_queue: NatsQueue) -> str:
     task_delete = TaskDelete(task_id=str(task_id).lower(), received_at=time.time())
-    delete_task_queue.push(task_delete)
+    await delete_task_queue.push(task_delete)
     return ""
 
 
-def delete_all_tasks(delete_task_queue: ReliableQueue) -> str:
-    """
-    Delete all tasks by pushing a delete request with the 'all' flag to the task deletion queue.
-
-    Args:
-        delete_task_queue: Queue for processing task deletion requests
-
-    Returns:
-        Empty string on successful deletion request
-    """
+async def delete_all_tasks(delete_task_queue: NatsQueue) -> str:
     task_delete = TaskDelete(all=True, received_at=time.time())
-    delete_task_queue.push(task_delete)
+    await delete_task_queue.push(task_delete)
     return ""
 
 
-def store_sarif_broadcast(broadcast: SARIFBroadcast, sarif_store: SARIFStore) -> str:
-    """
-    Store SARIF broadcast details in Redis.
-
-    Args:
-        broadcast: The SARIFBroadcast containing a list of SARIFBroadcastDetail
-        sarif_store: SARIFStore instance for storage
-
-    Returns:
-        Empty string on successful storage
-    """
+async def store_sarif_broadcast(broadcast: SARIFBroadcast, sarif_store: NatsSARIFStore) -> str:
     for sarif_detail in broadcast.broadcasts:
         logger.info(f"Storing SARIF detail for task {sarif_detail.task_id}, SARIF ID: {sarif_detail.sarif_id}")
-        sarif_store.store(sarif_detail)
+        await sarif_store.store(sarif_detail)
 
     return ""
 
 
-def get_status_tasks_state(redis_url: str) -> StatusTasksState:
-    """
-    Get the current state of tasks in the system.
-
-    Returns:
-        StatusTasksState: The current state of tasks in the system
-    """
-    redis = Redis.from_url(redis_url)
-    registry = TaskRegistry(redis)
+async def get_status_tasks_state(jetstream: JetStreamContext) -> StatusTasksState:
+    registry = NatsTaskRegistry(jetstream)
+    tasks_store = await registry._get_tasks_store()
+    tasks = await tasks_store.keys()
 
     tasks_cancelled = 0
     tasks_errored = 0
@@ -141,14 +105,18 @@ def get_status_tasks_state(redis_url: str) -> StatusTasksState:
     tasks_processing = 0
     tasks_succeeded = 0
 
-    for task in registry:
-        if registry.is_cancelled(task):
+    for task_id in tasks:
+        task = await registry.get(task_id)
+        if not task:
+            continue
+
+        if await registry.is_cancelled(task):
             tasks_cancelled += 1
-        elif not registry.is_expired(task):
+        elif not await registry.is_expired(task):
             tasks_processing += 1
-        elif registry.is_successful(task):
+        elif await registry.is_successful(task):
             tasks_succeeded += 1
-        elif registry.is_errored(task):
+        elif await registry.is_errored(task):
             tasks_errored += 1
         else:
             tasks_failed += 1

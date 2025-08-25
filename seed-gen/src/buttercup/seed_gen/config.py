@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, CliSubCommand
 
 
 class ServerCommand(BaseModel):
-    redis_url: Annotated[str, Field(default="redis://127.0.0.1:6379", description="Redis URL")]
+    nats_url: Annotated[str, Field(default="nats://127.0.0.1:4222", description="NATS URL")]
     corpus_root: Annotated[Path | None, Field(default=None, description="Corpus root directory")]
     sleep_time: Annotated[int, Field(default=5, description="Sleep between runs (seconds)")]
     crash_dir_count_limit: Annotated[

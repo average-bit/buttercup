@@ -20,35 +20,30 @@ services:
       - shared-tmp:/tmp
       - ../../node_data_storage/:/node_data
 
-  redis:
-    image: redis:7.4.2
-    restart: always
+  nats:
+    image: nats:2.10.7
     ports:
-      - '127.0.0.1:6379:6379'
-    # NOTE: Do not use the configuration file for now, so every time you restart
-    # the container, it will reset the redis instance
-    # command: redis-server /mount/redis.conf
-    # volumes:
-      # - cache:/data
-      # - ../../redis:/mount
+      - "4222:4222"
+      - "8222:8222"
+    command: "-js" # JetStream
     healthcheck:
-      test: [ "CMD-SHELL", "redis-cli ping | grep PONG" ]
-      interval: 1s
-      timeout: 3s
+      test: ["CMD", "nats", "healthz"]
+      interval: 10s
+      timeout: 5s
       retries: 5
 
   stimulate-fuzzer-test:
     build:
       context: ../../
       dockerfile: ./fuzzer/dockerfiles/runner_image.Dockerfile
-    command: /fuzzer/.venv/bin/python -m buttercup.fuzzing_infra.stimulate_build_bot --build_type fuzzer --ossfuzz /crs_scratch/oss-fuzz --engine libfuzzer --sanitizer address --target_package ${TARGET_PACKAGE} --redis_url redis://redis:6379 --source_path /crs_scratch/${TARGET_PACKAGE} --task_id 123e4567-e89b-12d3-a456-426614174000
+    command: /fuzzer/.venv/bin/python -m buttercup.fuzzing_infra.stimulate_build_bot --build_type fuzzer --ossfuzz /crs_scratch/oss-fuzz --engine libfuzzer --sanitizer address --target_package ${TARGET_PACKAGE} --nats_url nats://nats:4222 --source_path /crs_scratch/${TARGET_PACKAGE} --task_id 123e4567-e89b-12d3-a456-426614174000
     profiles:
       - fuzzer-test
     restart: no
     volumes:
       - ../../crs_scratch:/crs_scratch
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
       build-bot:
         condition: service_started
@@ -64,13 +59,13 @@ services:
     build:
       context: ../../
       dockerfile: ./fuzzer/dockerfiles/runner_image.Dockerfile
-    command: /fuzzer/.venv/bin/python -m buttercup.fuzzing_infra.orchestrator --redis_url redis://redis:6379
+    command: /fuzzer/.venv/bin/python -m buttercup.fuzzing_infra.orchestrator --nats_url nats://nats:4222
     profiles:
       - fuzzer-test
     volumes:
       - ../../crs_scratch:/crs_scratch
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
 
   graphdb:
@@ -129,7 +124,7 @@ services:
       - ../../tasks_storage:/tasks_storage
       - ../../node_data_storage/:/node_data
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
       dind:
         condition: service_started
@@ -137,7 +132,7 @@ services:
       #   condition: service_healthy
 
   coverage-bot:
-    command: ["buttercup-coverage-bot", "--wdir", "/node_data/crs_scratch", "--redis_url", "redis://redis:6379"]
+    command: ["buttercup-coverage-bot", "--wdir", "/node_data/crs_scratch", "--nats_url", "nats://nats:4222"]
     build:
       context: ../../
       dockerfile: ./fuzzer/dockerfiles/runner_image.Dockerfile
@@ -147,13 +142,13 @@ services:
       - ../../node_data_storage/:/node_data
     env_file: env.dev.compose
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
       dind:
         condition: service_started
 
   build-bot:
-    command: ["buttercup-fuzzer-builder", "--wdir", "/node_data/crs_scratch", "--redis_url", "redis://redis:6379", "--timer", "5000"]
+    command: ["buttercup-fuzzer-builder", "--wdir", "/node_data/crs_scratch", "--nats_url", "nats://nats:4222", "--timer", "5000"]
     build:
       context: ../../
       dockerfile: ./fuzzer/dockerfiles/runner_image.Dockerfile
@@ -163,13 +158,13 @@ services:
       - ../../node_data_storage/:/node_data
     env_file: env.dev.compose
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
       dind:
         condition: service_started
 
   tracer-bot:
-    command: ["buttercup-tracer-bot", "--wdir", "/node_data/crs_scratch", "--redis_url", "redis://redis:6379"]
+    command: ["buttercup-tracer-bot", "--wdir", "/node_data/crs_scratch", "--nats_url", "nats://nats:4222"]
     build:
       context: ../../
       dockerfile: ./fuzzer/dockerfiles/runner_image.Dockerfile
@@ -179,7 +174,7 @@ services:
       - ../../node_data_storage/:/node_data
     env_file: env.dev.compose
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
       dind:
         condition: service_started
@@ -188,13 +183,13 @@ services:
     build:
       context: ../../
       dockerfile: ./fuzzer/dockerfiles/runner_image.Dockerfile
-    command: ["buttercup-fuzzer", "--crs_scratch_dir", "/node_data/crs_scratch", "--redis_url", "redis://redis:6379", "--timeout", "900", "--timer", "5000", "--crash_dir_count_limit", "100"]
+    command: ["buttercup-fuzzer", "--crs_scratch_dir", "/node_data/crs_scratch", "--nats_url", "nats://nats:4222", "--timeout", "900", "--timer", "5000", "--crash_dir_count_limit", "100"]
     env_file: env.dev.compose
     volumes:
       - ../../crs_scratch:/crs_scratch
       - ../../node_data_storage/:/node_data
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
 
   task-downloader:
@@ -207,7 +202,7 @@ services:
       - ../../node_data_storage/:/node_data
     env_file: env.dev.compose
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
 
   task-server:
@@ -219,7 +214,7 @@ services:
       - "127.0.0.1:8000:8000"
     env_file: env.dev.compose
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
 
   scheduler:
@@ -233,7 +228,7 @@ services:
       - ../../node_data_storage/:/node_data
     env_file: env.dev.compose
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
 
   seed-gen:
@@ -250,7 +245,7 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
       litellm:
         condition: service_started
@@ -271,7 +266,7 @@ services:
       - LANGFUSE_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
       - LANGFUSE_SECRET_KEY=${LANGFUSE_SECRET_KEY}
     depends_on:
-      redis:
+      nats:
         condition: service_healthy
       dind:
         condition: service_started

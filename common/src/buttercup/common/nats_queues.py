@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from redis import Redis, RedisError
+from nats.aio.client import Client as NATS
+from nats.js.client import JetStreamContext
+from nats.aio.msg import Msg
 from google.protobuf.message import Message
 from functools import wraps
 from buttercup.common.datastructures.msg_pb2 import (
@@ -25,6 +27,7 @@ import uuid
 import os
 from enum import Enum
 from typing import Any
+import asyncio
 
 
 TIMES_DELIVERED_FIELD = "times_delivered"
@@ -65,8 +68,6 @@ BUILD_OUTPUT_TASK_TIMEOUT_MS = int(os.getenv("BUILD_OUTPUT_TASK_TIMEOUT_MS", 3 *
 DOWNLOAD_TASK_TIMEOUT_MS = int(os.getenv("DOWNLOAD_TASK_TIMEOUT_MS", 10 * 60 * 1000))
 READY_TASK_TIMEOUT_MS = int(os.getenv("READY_TASK_TIMEOUT_MS", 3 * 60 * 1000))
 DELETE_TASK_TIMEOUT_MS = int(os.getenv("DELETE_TASK_TIMEOUT_MS", 5 * 60 * 1000))
-# Shorter timeout for crashes we want to retry builds fairly quickly since
-# all we do in these tasks is reproduce
 CRASH_TASK_TIMEOUT_MS = int(os.getenv("CRASH_TASK_TIMEOUT_MS", 4 * 60 * 1000))
 PATCH_TASK_TIMEOUT_MS = int(os.getenv("PATCH_TASK_TIMEOUT_MS", 10 * 60 * 1000))
 CONFIRMED_VULNERABILITIES_TASK_TIMEOUT_MS = int(os.getenv("CONFIRMED_VULNERABILITIES_TASK_TIMEOUT_MS", 10 * 60 * 1000))
@@ -85,61 +86,63 @@ MsgType = TypeVar("MsgType", bound=Message)
 
 
 @dataclass
-class RQItem(Generic[MsgType]):
+class NQItem(Generic[MsgType]):
     """
-    A single item in a reliable queue.
+    A single item in a NATS queue.
     """
 
-    item_id: str
+    item: Msg
     deserialized: MsgType
+
+    def __post_init__(self):
+        # The `item_id` is used for acknowledging the message. In NATS, the message
+        # object itself is used for acknowledgment, so we store the whole message.
+        self.item_id = self.item.sid
 
 
 @dataclass
-class ReliableQueue(Generic[MsgType]):
+class NatsQueue(Generic[MsgType]):
     """
-    A queue that is reliable and can be used to process tasks in a distributed environment.
+    A queue that is reliable and can be used to process tasks in a distributed environment using NATS.
     """
 
-    redis: Redis
+    nats: NATS
+    jetstream: JetStreamContext
     queue_name: str
     msg_builder: Type[MsgType]
     group_name: str | None = None
     task_timeout_ms: int = 180000
     reader_name: str | None = None
-    last_stream_id: str = ">"
     block_time: int | None = 200
+    consumer: Any = field(init=False)
 
-    INAME = b"item"
-
-    def __post_init__(self) -> None:
+    async def init_consumer(self) -> None:
         if self.reader_name is None:
             self.reader_name = f"rqueue_{str(uuid.uuid4())}"
 
-        if self.group_name is not None:
-            # Create consumer group if it doesn't exist
+        try:
+            await self.jetstream.add_stream(name=self.queue_name, subjects=[self.queue_name])
+        except Exception:
+            pass
+
+        if self.group_name:
             try:
-                self.redis.xgroup_create(self.queue_name, self.group_name, mkstream=True, id="0")
-            except RedisError as e:
-                # Group may already exist
-                if "BUSYGROUP Consumer Group name already exists" in str(e):
-                    pass
-                else:
-                    logger.exception(
-                        "Failed to create consumer group %s for queue %s", self.group_name, self.queue_name
-                    )
-                    pass
+                self.consumer = await self.jetstream.consumer_info(self.queue_name, self.group_name)
+            except Exception:
+                self.consumer = await self.jetstream.add_consumer(self.queue_name, durable_name=self.group_name)
 
-    def size(self) -> int:
-        return self.redis.xlen(self.queue_name)
+    async def size(self) -> int:
+        stream_state = await self.jetstream.stream_info(self.queue_name)
+        return stream_state.state.messages
 
-    def push(self, item: MsgType) -> None:
+    async def push(self, item: MsgType) -> None:
         bts = item.SerializeToString()
-        self.redis.xadd(self.queue_name, {self.INAME: bts})
+        await self.jetstream.publish(self.queue_name, bts)
 
     @staticmethod
     def _ensure_group_name(func: F) -> F:
         @wraps(func)
-        def wrapper(self: ReliableQueue[MsgType], *args: Any, **kwargs: Any) -> Any:
+        def wrapper(self: NatsQueue[MsgType], *args: Any, **kwargs: Any) -> Any:
             if self.group_name is None:
                 raise ValueError("group_name must be set for this operation")
 
@@ -148,68 +151,35 @@ class ReliableQueue(Generic[MsgType]):
         return cast(F, wrapper)
 
     @_ensure_group_name
-    def pop(self) -> RQItem[MsgType] | None:
+    async def pop(self) -> NQItem[MsgType] | None:
         assert self.group_name
         assert self.reader_name
 
-        streams_items = self.redis.xreadgroup(
-            self.group_name,
-            self.reader_name,
-            {self.queue_name: self.last_stream_id},
-            block=self.block_time,
-            count=1,
-        )
-        # Redis xreadgroup returns a list of [stream_name, [(message_id, {field: value})]]
-        if streams_items is None or len(streams_items) == 0:
-            # No message found in the pending/regular queue for this reader.
-            # Try to autoclaim a message
-            res = self.redis.xautoclaim(
-                self.queue_name,
-                self.group_name,
-                self.reader_name,
-                min_idle_time=self.task_timeout_ms,
-                count=1,
-            )
-            if res is None or len(res[1]) == 0:
-                return None
-
-            stream_item = res[1]
-        else:
-            stream_item = streams_items[0][1]
-
-        if len(stream_item) == 0 and self.last_stream_id != ">":
-            # If the queue was created with a last_stream_id that is not `>`, it
-            # means the pending items for this reader were desired. In case
-            # that's the case and no items were found in the pending queue, look
-            # at new messages
-            self.last_stream_id = ">"
-            return self.pop()
-
-        # Extract message ID and data
-        message_id = stream_item[0][0]
-        message_data = stream_item[0][1]
-
-        # Create and parse protobuf message
-        msg = self.msg_builder()
-        msg.ParseFromString(message_data[self.INAME])
-
-        return RQItem[MsgType](item_id=message_id, deserialized=msg)
+        try:
+            msgs = await self.consumer.fetch(batch=1, timeout=self.block_time / 1000 if self.block_time else 0)
+            msg = msgs[0]
+            # Create and parse protobuf message
+            deserialized_msg = self.msg_builder()
+            deserialized_msg.ParseFromString(msg.data)
+            return NQItem[MsgType](item=msg, deserialized=deserialized_msg)
+        except (asyncio.TimeoutError, IndexError):
+            return None
 
     @_ensure_group_name
-    def ack_item(self, item_id: str) -> None:
-        self.redis.xack(self.queue_name, self.group_name, item_id)
+    async def ack_item(self, item: NQItem[MsgType]) -> None:
+        await item.item.ack()
 
     @_ensure_group_name
-    def times_delivered(self, item_id: str) -> int:
-        pending = self.redis.xpending_range(self.queue_name, self.group_name, item_id, item_id, count=1)
-        if pending is None or len(pending) == 0:
-            return 0
-
-        return cast(int, pending[0][TIMES_DELIVERED_FIELD])
+    async def times_delivered(self, item: NQItem[MsgType]) -> int:
+        return item.item.metadata.num_delivered
 
     @_ensure_group_name
-    def claim_item(self, item_id: str, min_idle_time: int = 0) -> None:
-        self.redis.xclaim(self.queue_name, self.group_name, self.reader_name, min_idle_time, [item_id])
+    async def claim_item(self, item: NQItem[MsgType]) -> None:
+        # NATS doesn't have an explicit "claim" operation like Redis.
+        # The act of pulling a message and not acknowledging it makes it
+        # available for redelivery after the ack_wait timeout.
+        # We can simulate a claim by not acknowledging the message.
+        pass
 
 
 @dataclass
@@ -221,10 +191,11 @@ class QueueConfig:
 
 
 @dataclass
-class QueueFactory:
-    """Factory for creating common reliable queues"""
+class NatsQueueFactory:
+    """Factory for creating common reliable queues using NATS"""
 
-    redis: Redis
+    nats: NATS
+    jetstream: JetStreamContext
     _config: dict[QueueNames, QueueConfig] = field(
         default_factory=lambda: {
             QueueNames.BUILD: QueueConfig(
@@ -311,107 +282,89 @@ class QueueFactory:
     @overload
     def create(
         self, queue_name: Literal[QueueNames.BUILD], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[BuildRequest]: ...
+    ) -> NatsQueue[BuildRequest]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.BUILD_OUTPUT], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[BuildOutput]: ...
+    ) -> NatsQueue[BuildOutput]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.DOWNLOAD_TASKS], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[TaskDownload]: ...
+    ) -> NatsQueue[TaskDownload]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.READY_TASKS], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[TaskReady]: ...
+    ) -> NatsQueue[TaskReady]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.CRASH], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[Crash]: ...
+    ) -> NatsQueue[Crash]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.TRACED_VULNERABILITIES], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[TracedCrash]: ...
+    ) -> NatsQueue[TracedCrash]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.CONFIRMED_VULNERABILITIES], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[ConfirmedVulnerability]: ...
+    ) -> NatsQueue[ConfirmedVulnerability]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.DELETE_TASK], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[TaskDelete]: ...
+    ) -> NatsQueue[TaskDelete]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.PATCHES], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[Patch]: ...
+    ) -> NatsQueue[Patch]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.INDEX], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[IndexRequest]: ...
+    ) -> NatsQueue[IndexRequest]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.INDEX_OUTPUT], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[IndexOutput]: ...
+    ) -> NatsQueue[IndexOutput]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.POV_REPRODUCER_REQUESTS], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[POVReproduceRequest]: ...
+    ) -> NatsQueue[POVReproduceRequest]: ...
 
     @overload
     def create(
         self, queue_name: Literal[QueueNames.POV_REPRODUCER_RESPONSES], group_name: GroupNames, **kwargs: Any
-    ) -> ReliableQueue[POVReproduceResponse]: ...
+    ) -> NatsQueue[POVReproduceResponse]: ...
 
     @overload
     def create(
         self, queue_name: QueueNames, group_name: GroupNames | None = None, **kwargs: Any
-    ) -> ReliableQueue[MsgType]: ...
+    ) -> NatsQueue[MsgType]: ...
 
-    def create(
-        self, queue_name: QueueNames, group_name: GroupNames | None = None, **kwargs: Any
-    ) -> ReliableQueue[MsgType]:
+    def create(self, queue_name: QueueNames, group_name: GroupNames | None = None, **kwargs: Any) -> NatsQueue[MsgType]:
         if queue_name not in self._config:
             raise ValueError(f"Invalid queue name: {queue_name}")
 
         config = self._config[queue_name]
-        queue_args = {
-            "redis": self.redis,
-            "queue_name": config.queue_name,
-            "msg_builder": config.msg_builder,
-            "task_timeout_ms": config.task_timeout_ms,
-        }
-        if group_name is not None:
-            if group_name not in config.group_names:
-                raise ValueError(f"Invalid group name: {group_name}")
 
-            queue_args["group_name"] = group_name
+        if group_name is not None and group_name not in config.group_names:
+            raise ValueError(f"Invalid group name: {group_name}")
 
-        queue_args.update(kwargs)
-        return ReliableQueue(**queue_args)  # type: ignore[arg-type]
-
-
-@dataclass
-class FuzzConfiguration:
-    corpus_dir: str
-    target_path: str
-    engine: str
-    sanitizer: str
-
-
-@dataclass
-class BuildConfiguration:
-    project_id: str
-    engine: str
-    sanitizer: str
-    source_path: str | None
+        queue: NatsQueue[MsgType] = NatsQueue(
+            nats=self.nats,
+            jetstream=self.jetstream,
+            queue_name=config.queue_name,
+            msg_builder=config.msg_builder,
+            task_timeout_ms=config.task_timeout_ms,
+            group_name=group_name,
+            **kwargs,
+        )
+        return queue

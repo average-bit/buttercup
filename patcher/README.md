@@ -283,7 +283,7 @@ The patcher can be run in several modes:
 
 ```bash
 # Service mode
-buttercup-patcher serve --redis-url redis://localhost:6379
+buttercup-patcher serve --nats-url nats://localhost:4222
 
 # Single task mode
 buttercup-patcher process --task-id TASK123 --internal-patch-id PATCH456
@@ -296,7 +296,7 @@ buttercup-patcher process-msg --msg-path vulnerability.msg
 
 The patcher integrates with:
 
-- **Redis**: For queue management and task coordination
+- **NATS**: For queue management and task coordination
 - **Program Model**: For code understanding and snippet retrieval
 - **Challenge Tasks**: For building and testing patches
 - **Telemetry**: For monitoring and observability

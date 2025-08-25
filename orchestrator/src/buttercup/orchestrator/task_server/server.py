@@ -28,18 +28,20 @@ from buttercup.orchestrator.task_server.dependencies import (
     get_task_queue,
     get_settings,
     get_sarif_store,
+    get_jetstream,
 )
 from buttercup.orchestrator.task_server.config import TaskServerSettings
-from buttercup.common.queues import ReliableQueue
-from buttercup.common.sarif_store import SARIFStore
+from buttercup.common.nats_queues import NatsQueue
+from buttercup.common.nats_datastructures import NatsSARIFStore
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 from buttercup.orchestrator.api_client_factory import create_api_client
 from buttercup.orchestrator.competition_api_client.api.ping_api import PingApi
 from buttercup.orchestrator.competition_api_client.models.types_ping_response import TypesPingResponse
+from nats.js.client import JetStreamContext
 
 settings = get_settings()
 logger = setup_package_logger("task-server", __name__, settings.log_level, settings.log_max_line_length)
-logger.info("Redis URL: %s", settings.redis_url)
+logger.info("NATS URL: %s", settings.nats_url)
 logger.info("Competition API URL: %s", settings.competition_api_url)
 logger.info("Competition API Key ID: %s", settings.competition_api_username)
 logger.info("API Key ID: %s", settings.api_key_id)
@@ -145,14 +147,15 @@ def check_auth(
 
 
 @app.get("/status/", response_model=Status, tags=["status"])
-def get_status_(
+async def get_status_(
     credentials: Annotated[HTTPBasicCredentials, Depends(check_auth)],
+    jetstream: Annotated[JetStreamContext, Depends(get_jetstream)],
 ) -> Status:
     """
     CRS Status
     """
 
-    def is_competition_api_ready() -> bool:
+    async def is_competition_api_ready() -> bool:
         is_ready = False
         api_client = create_api_client(
             competition_api_url=settings.competition_api_url,
@@ -163,7 +166,7 @@ def get_status_(
 
         response: TypesPingResponse | None = None
         try:
-            response = api.v1_ping_get()
+            response = await api.v1_ping_get()
         except (MaxRetryError, NewConnectionError):
             is_ready = False
 
@@ -175,15 +178,15 @@ def get_status_(
 
     return Status(
         details={},
-        ready=is_competition_api_ready(),
+        ready=await is_competition_api_ready(),
         since=0,
-        state=StatusState(tasks=get_status_tasks_state(settings.redis_url)),
+        state=StatusState(tasks=await get_status_tasks_state(jetstream)),
         version=__version__,
     )
 
 
 @app.delete("/status/", response_model=str, tags=["status"])
-def delete_status_(
+async def delete_status_(
     credentials: Annotated[HTTPBasicCredentials, Depends(check_auth)],
 ) -> str:
     """
@@ -194,16 +197,16 @@ def delete_status_(
 
 
 @app.post("/v1/sarif/", response_model=str, tags=["sarif"])
-def post_v1_sarif_(
+async def post_v1_sarif_(
     credentials: Annotated[HTTPBasicCredentials, Depends(check_auth)],
     body: SARIFBroadcast,
-    sarif_store: Annotated[SARIFStore, Depends(get_sarif_store)],
+    sarif_store: Annotated[NatsSARIFStore, Depends(get_sarif_store)],
 ) -> str:
     """
     Submit Sarif Broadcast
     """
     logger.info("Accepting Sarif Broadcast: %s", body)
-    return store_sarif_broadcast(body, sarif_store)
+    return await store_sarif_broadcast(body, sarif_store)
 
 
 @app.post(
@@ -212,64 +215,38 @@ def post_v1_sarif_(
     responses={"202": {"model": str}},
     tags=["task"],
 )
-def post_v1_task_(
+async def post_v1_task_(
     credentials: Annotated[HTTPBasicCredentials, Depends(check_auth)],
     body: Task,
-    tasks_queue: Annotated[ReliableQueue, Depends(get_task_queue)],
+    tasks_queue: Annotated[NatsQueue, Depends(get_task_queue)],
 ) -> Optional[str]:
     """
     Submit Task
     """
     logger.debug("Accepting Task: %s", body)
-    return new_task(body, tasks_queue)
+    return await new_task(body, tasks_queue)
 
 
 @app.delete("/v1/task/", response_model=str, tags=["task"])
-def delete_v1_task_(
+async def delete_v1_task_(
     credentials: Annotated[HTTPBasicCredentials, Depends(check_auth)],
-    delete_task_queue: Annotated[ReliableQueue, Depends(get_delete_task_queue)],
+    delete_task_queue: Annotated[NatsQueue, Depends(get_delete_task_queue)],
 ) -> str:
     """
     Cancel All Tasks
-
-    This endpoint allows canceling all existing tasks in the system. All tasks will be marked for deletion.
-
-    Args:
-        credentials: HTTP Basic authentication credentials required to access this endpoint
-        delete_task_queue: Queue for processing task deletion requests
-
-    Returns:
-        str: Empty string on successful deletion request
-
-    Raises:
-        HTTPException: If authentication fails
     """
     logger.info("Deleting all tasks")
-    return delete_all_tasks(delete_task_queue)
+    return await delete_all_tasks(delete_task_queue)
 
 
 @app.delete("/v1/task/{task_id}/", response_model=str, tags=["task"])
-def delete_v1_task_task_id_(
+async def delete_v1_task_task_id_(
     credentials: Annotated[HTTPBasicCredentials, Depends(check_auth)],
     task_id: UUID,
-    delete_task_queue: Annotated[ReliableQueue, Depends(get_delete_task_queue)],
+    delete_task_queue: Annotated[NatsQueue, Depends(get_delete_task_queue)],
 ) -> str:
     """
     Cancel a task by its ID.
-
-    This endpoint allows canceling an existing task by its unique identifier. The task will be marked for deletion
-    and removed from the system.
-
-    Args:
-        credentials: HTTP Basic authentication credentials required to access this endpoint
-        task_id: The UUID of the task to cancel
-        delete_task_queue: Queue for processing task deletion requests
-
-    Returns:
-        str: Empty string on successful deletion request
-
-    Raises:
-        HTTPException: If authentication fails
     """
     logger.info("Deleting task: %s", task_id)
-    return delete_task(task_id, delete_task_queue)
+    return await delete_task(task_id, delete_task_queue)

@@ -218,11 +218,11 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
     { name = "langfuse" },
+    { name = "nats-py" },
     { name = "openlit" },
     { name = "protobuf" },
     { name = "pydantic-settings" },
     { name = "pymongo" },
-    { name = "redis" },
     { name = "six" },
 ]
 
@@ -234,11 +234,11 @@ requires-dist = [
     { name = "langchain-openai", specifier = "~=0.3.2" },
     { name = "langchain-text-splitters", specifier = "~=0.3.7" },
     { name = "langfuse", specifier = "~=2.59.2" },
+    { name = "nats-py", specifier = ">=2.8.0" },
     { name = "openlit", specifier = "==1.32.12" },
     { name = "protobuf", specifier = ">=3.20,<=3.20.3" },
     { name = "pydantic-settings", specifier = ">=2.7.1" },
     { name = "pymongo", specifier = ">=4.10.1" },
-    { name = "redis", specifier = ">=5.2.1,<6.0.0" },
     { name = "six", specifier = ">=1.17.0" },
 ]
 
@@ -249,7 +249,6 @@ dev = [
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "ruff", specifier = ">=0.9.2" },
     { name = "types-pyyaml" },
-    { name = "types-redis" },
     { name = "types-requests" },
 ]
 
@@ -846,6 +845,12 @@ wheels = [
 ]
 
 [[package]]
+name = "nats-py"
+version = "2.11.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/be/757c8af63596453daaa42cc21be51aa42fc6b23cc9d4347784f99c8357b5/nats_py-2.11.0.tar.gz", hash = "sha256:fb1097db8b520bb4c8f5ad51340ca54d9fa54dbfc4ecc81c3625ef80994b6100", size = 114186, upload-time = "2025-07-22T08:41:08.589Z" }
+
+[[package]]
 name = "numpy"
 version = "2.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1092,6 +1097,7 @@ dependencies = [
     { name = "langchain-community" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint" },
+    { name = "nats-py" },
     { name = "openai" },
     { name = "program-model" },
     { name = "pydantic-settings" },
@@ -1120,6 +1126,7 @@ requires-dist = [
     { name = "langgraph", specifier = "~=0.5.2" },
     { name = "langgraph-checkpoint", specifier = ">=2.0.25" },
     { name = "mypy", marker = "extra == 'tests'", specifier = ">=1.15.0" },
+    { name = "nats-py", specifier = ">=2.8.0" },
     { name = "openai", specifier = ">=1.60.2" },
     { name = "program-model", editable = "../program-model" },
     { name = "pydantic-settings", specifier = ">=2.7.1" },
@@ -1158,6 +1165,7 @@ version = "0.1.0"
 source = { editable = "../program-model" }
 dependencies = [
     { name = "common" },
+    { name = "nats-py" },
     { name = "protobuf" },
     { name = "rapidfuzz" },
     { name = "tree-sitter" },
@@ -1167,6 +1175,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "common", editable = "../common" },
+    { name = "nats-py", specifier = ">=2.8.0" },
     { name = "protobuf", specifier = ">=3.20,<=3.20.3" },
     { name = "rapidfuzz", specifier = "~=3.12.2" },
     { name = "tree-sitter", specifier = ">=0.24.0" },
@@ -1305,15 +1314,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pyjwt"
-version = "2.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fb/68/ce067f09fca4abeca8771fe667d89cc347d1e99da3e093112ac329c6020e/pyjwt-2.9.0.tar.gz", hash = "sha256:7e1e5b56cc735432a7369cbfa0efe50fa113ebecdc04ae6922deba8b84582d0c", size = 78825, upload-time = "2024-08-01T15:01:08.445Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/84/0fdf9b18ba31d69877bd39c9cd6052b47f3761e9910c15de788e519f079f/PyJWT-2.9.0-py3-none-any.whl", hash = "sha256:3b02fb0f44517787776cf48f2ae25d8e14f300e6d7545a4315cee571a415e850", size = 22344, upload-time = "2024-08-01T15:01:06.481Z" },
-]
-
-[[package]]
 name = "pymongo"
 version = "4.13.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1447,18 +1447,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b1/fe/fdae322869885115dd19a38c1da71b73a8832aa77757c93f460743d4f54c/rapidfuzz-3.12.2-cp312-cp312-win32.whl", hash = "sha256:6c7152d77b2eb6bfac7baa11f2a9c45fd5a2d848dbb310acd0953b3b789d95c9", size = 1845332, upload-time = "2025-03-02T18:30:22.705Z" },
     { url = "https://files.pythonhosted.org/packages/ca/a4/2ccebda5fb8a266d163d57a42c2a6ef6f91815df5d89cf38c12e8aa6ed0b/rapidfuzz-3.12.2-cp312-cp312-win_amd64.whl", hash = "sha256:1a314d170ee272ac87579f25a6cf8d16a031e1f7a7b07663434b41a1473bc501", size = 1617926, upload-time = "2025-03-02T18:30:24.622Z" },
     { url = "https://files.pythonhosted.org/packages/a5/bc/aa8a4dc4ebff966dd039cce017c614cfd202049b4d1a2daafee7d018521b/rapidfuzz-3.12.2-cp312-cp312-win_arm64.whl", hash = "sha256:d41e8231326e94fd07c4d8f424f6bed08fead6f5e6688d1e6e787f1443ae7631", size = 864737, upload-time = "2025-03-02T18:30:26.508Z" },
-]
-
-[[package]]
-name = "redis"
-version = "5.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pyjwt" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/71/dd/2b37032f4119dff2a2f9bbcaade03221b100ba26051bb96e275de3e5db7a/redis-5.3.0.tar.gz", hash = "sha256:8d69d2dde11a12dc85d0dbf5c45577a5af048e2456f7077d87ad35c1c81c310e", size = 4626288, upload-time = "2025-04-30T14:54:40.634Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/45/b0/aa601efe12180ba492b02e270554877e68467e66bda5d73e51eaa8ecc78a/redis-5.3.0-py3-none-any.whl", hash = "sha256:f1deeca1ea2ef25c1e4e46b07f4ea1275140526b1feea4c6459c0ec27a10ef83", size = 272836, upload-time = "2025-04-30T14:54:30.744Z" },
 ]
 
 [[package]]
