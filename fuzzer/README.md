@@ -1,6 +1,6 @@
 # Demo fuzzer.
 
-General idea here is we have a set of builders and a fuzzer bot managed through redis queues. 
+General idea here is we have a set of builders and a fuzzer bot managed through nats queues.
 
 All commands are suggestions based on vibes at the moment and not really tested...
 
@@ -32,14 +32,12 @@ export OSS_FUZZ_PATH=$(pwd)/oss-fuzz
 
 ## Running:
 
-### Start redis:
+### Start nats:
 
 ```
-docker pull redis
-docker run redis
-export REDIS_IP=$(docker inspect \
-  -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' <container>)
-export REDIS_URL="redis://$REDIS_IP"
+docker pull nats
+docker run -p 4222:4222 -p 8222:8222 nats:latest -js
+export NATS_URL="nats://127.0.0.1:4222"
 ```
 
 ### Starting the orchestrator:
@@ -47,26 +45,26 @@ export REDIS_URL="redis://$REDIS_IP"
 This orchestrator mocks the interactions of an actual orchestrator by receiving build outputs and adding them to a fuzzer distribution.
 
 ```
-python fuzzing_infra/orchestrator.py --redis_url $REDIS_URL
+python fuzzing_infra/orchestrator.py --nats_url $NATS_URL
 ```
 
 ## Starting a build bot
 
 This starts a build bot that will build fuzzr harnesses using helper.py. Allow caching means it will be built directly in the ossfuzz directory. This mode allows for only building a harness once rather than snapshotting per request trees.
 ```
-python fuzzing_infra/builder_bot.py  --redis_url $REDIS_URL --allow-caching
+python fuzzing_infra/builder_bot.py  --nats_url $NATS_URL --allow-caching
 ```
 
 ## Starting the fuzzer bot
 ```
-python fuzzing_infra/fuzzer_bot.py --redis_url $REDIS_URL --timeout 120
+python fuzzing_infra/fuzzer_bot.py --nats_url $NATS_URL --timeout 120
 ```
 
 ## Sending a build request:
 
 Creating a manual build request:
 ```
-python fuzzing_infra/stimulate_build_bot.py --redis_url $REDIS_URL --target_package nginx --ossfuzz $OSS_FUZZ_PATH --engine libfuzzer --sanitizer address
+python fuzzing_infra/stimulate_build_bot.py --nats_url $NATS_URL --target_package nginx --ossfuzz $OSS_FUZZ_PATH --engine libfuzzer --sanitizer address
 ```
 
 This command should result in the builder emitting build logs and then fuzzer logs.

@@ -1,13 +1,14 @@
 """The `seed-gen` entrypoint."""
 
+import asyncio
 import logging
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
+import nats
 from pydantic_settings import get_subcommand
-from redis import Redis
 
 import buttercup.seed_gen.cli_load_dotenv  # noqa: F401
 from buttercup.common.challenge_task import ChallengeTask
@@ -28,7 +29,7 @@ from buttercup.seed_gen.vuln_discovery_full import VulnDiscoveryFullTask
 logger = logging.getLogger(__name__)
 
 
-def command_server(settings: Settings) -> None:
+async def command_server(settings: Settings) -> None:
     """Seed-gen worker server"""
     if settings.server is None:
         raise ValueError("Server command not provided")
@@ -37,9 +38,10 @@ def command_server(settings: Settings) -> None:
     if settings.server.corpus_root:
         os.makedirs(settings.server.corpus_root, exist_ok=True)
     init_telemetry("seed-gen")
-    redis = Redis.from_url(settings.server.redis_url)
+    nc = await nats.connect(settings.server.nats_url)
+    js = nc.jetstream()
     seed_gen_bot = SeedGenBot(
-        redis,
+        js,
         settings.server.sleep_time,
         settings.wdir,
         max_corpus_seed_size=settings.server.max_corpus_seed_size,
@@ -47,7 +49,9 @@ def command_server(settings: Settings) -> None:
         corpus_root=str(settings.server.corpus_root) if settings.server.corpus_root else None,
         crash_dir_count_limit=settings.server.crash_dir_count_limit,
     )
-    seed_gen_bot.run()
+    await seed_gen_bot.__post_init__()
+    await seed_gen_bot.run()
+    await nc.close()
 
 
 def command_process(settings: Settings) -> None:
@@ -149,6 +153,6 @@ def main() -> None:
     )
     command = get_subcommand(settings)
     if isinstance(command, ProcessCommand):
-        command_process(settings)  # type: ignore[unreachable]
+        command_process(settings)
     else:
-        command_server(settings)
+        asyncio.run(command_server(settings))

@@ -1,13 +1,13 @@
 from buttercup.fuzzing_infra.runner import Runner, Conf, FuzzConfiguration
 from buttercup.common.datastructures.msg_pb2 import BuildType, WeightedHarness, Crash
 from buttercup.common.datastructures.aliases import BuildType as BuildTypeHint
-from buttercup.common.queues import QueueFactory, QueueNames
+from buttercup.common.nats_queues import NatsQueueFactory, QueueNames, NatsQueue
 from buttercup.common.corpus import Corpus, CrashDir
 from buttercup.common import stack_parsing
-from buttercup.common.stack_parsing import CrashSet
+from buttercup.common.nats_datastructures import NatsCrashSet
 from buttercup.common.logger import setup_package_logger
 from buttercup.common.utils import setup_periodic_zombie_reaper
-from redis import Redis
+from nats.js.client import JetStreamContext
 from clusterfuzz.fuzz import engine
 from buttercup.common.default_task_loop import TaskLoop
 from typing import List
@@ -21,6 +21,8 @@ from opentelemetry import trace
 from opentelemetry.trace.status import Status, StatusCode
 from buttercup.common.node_local import scratch_dir
 from pathlib import Path
+import nats
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ logger = logging.getLogger(__name__)
 class FuzzerBot(TaskLoop):
     def __init__(
         self,
-        redis: Redis,
+        jetstream: JetStreamContext,
         timer_seconds: int,
         timeout_seconds: int,
         python: str,
@@ -37,17 +39,21 @@ class FuzzerBot(TaskLoop):
         max_pov_size: int,
     ):
         self.runner = Runner(Conf(timeout_seconds))
-        self.output_q = QueueFactory(redis).create(QueueNames.CRASH)
+        self.output_q: NatsQueue[Crash] | None = None
         self.python = python
         self.crs_scratch_dir = crs_scratch_dir
         self.crash_dir_count_limit = crash_dir_count_limit
         self.max_pov_size = max_pov_size
-        super().__init__(redis, timer_seconds)
+        super().__init__(jetstream, timer_seconds)
+
+    async def __post_init__(self):
+        self.output_q = NatsQueueFactory(self.jetstream.client, self.jetstream).create(QueueNames.CRASH)
+        await self.output_q.__post_init__()
 
     def required_builds(self) -> List[BuildTypeHint]:
         return [BuildType.FUZZER]
 
-    def run_task(self, task: WeightedHarness, builds: dict[BuildTypeHint, BuildOutput]) -> None:
+    async def run_task(self, task: WeightedHarness, builds: dict[BuildTypeHint, BuildOutput]) -> None:
         with scratch_dir() as td:
             logger.info(f"Running fuzzer for {task.harness_name} | {task.package_name} | {task.task_id}")
 
@@ -84,7 +90,7 @@ class FuzzerBot(TaskLoop):
                     )
                     result = self.runner.run_fuzzer(fuzz_conf)
 
-                    crash_set = CrashSet(self.redis)
+                    crash_set = NatsCrashSet(self.jetstream)
                     crash_dir = CrashDir(
                         self.crs_scratch_dir, task.task_id, task.harness_name, count_limit=self.crash_dir_count_limit
                     )
@@ -103,12 +109,8 @@ class FuzzerBot(TaskLoop):
 
                         cdata = stack_parsing.get_crash_token(crash.stacktrace)
                         dst = crash_dir.copy_file(crash.input_path, cdata, build.sanitizer)
-                        if crash_set.add(
-                            task.package_name,
-                            task.harness_name,
-                            task.task_id,
-                            build.sanitizer,
-                            crash.stacktrace,
+                        if await crash_set.contains(
+                            f"{task.package_name}_{task.harness_name}_{task.task_id}_{build.sanitizer}_{cdata}"
                         ):
                             logger.info(
                                 f"Crash {crash.input_path}|{crash.reproduce_args}|{crash.crash_time} already in set"
@@ -117,20 +119,21 @@ class FuzzerBot(TaskLoop):
                             continue
 
                         logger.info(f"Found unique crash {dst}")
-                        crash = Crash(
+                        crash_msg = Crash(
                             target=build,
                             harness_name=task.harness_name,
                             crash_input_path=dst,
                             stacktrace=crash.stacktrace,
                             crash_token=cdata,
                         )
-                        self.output_q.push(crash)
+                        assert self.output_q is not None
+                        await self.output_q.push(crash_msg)
 
                     span.set_status(Status(StatusCode.OK))
                     logger.info(f"Fuzzer finished for {build.engine} | {build.sanitizer} | {task.harness_name}")
 
 
-def main() -> None:
+async def main() -> None:
     args = FuzzerBotSettings()
     setup_package_logger("fuzzer-bot", __name__, args.log_level, args.log_max_line_length)
     init_telemetry("fuzzer")
@@ -139,9 +142,12 @@ def main() -> None:
 
     logger.info(f"Starting fuzzer (crs_scratch_dir: {args.crs_scratch_dir})")
 
+    nc = await nats.connect(args.nats_url)
+    js = nc.jetstream()
+
     seconds_sleep = args.timer // 1000
     fuzzer = FuzzerBot(
-        Redis.from_url(args.redis_url),
+        js,
         seconds_sleep,
         args.timeout,
         args.python,
@@ -149,8 +155,10 @@ def main() -> None:
         crash_dir_count_limit=(args.crash_dir_count_limit if args.crash_dir_count_limit > 0 else None),
         max_pov_size=args.max_pov_size,
     )
-    fuzzer.run()
+    await fuzzer.__post_init__()
+    await fuzzer.run()
+    await nc.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

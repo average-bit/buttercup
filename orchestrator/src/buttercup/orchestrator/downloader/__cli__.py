@@ -9,10 +9,10 @@ from buttercup.common.logger import setup_package_logger
 from pydantic_settings import get_subcommand
 from buttercup.common.datastructures.msg_pb2 import Task, SourceDetail
 from buttercup.orchestrator.utils import response_stream_to_file
-from redis import Redis
 import requests.adapters
 from requests_file import FileAdapter
 import requests
+import nats
 
 
 def prepare_task(command: DownloaderProcessCommand, session: requests.Session) -> Task:
@@ -48,23 +48,25 @@ def prepare_task(command: DownloaderProcessCommand, session: requests.Session) -
     return task
 
 
-def main() -> None:
+async def main() -> None:
     settings = DownloaderSettings()
     setup_package_logger("task-downloader", __name__, settings.log_level, settings.log_max_line_length)
     command = get_subcommand(settings)
     if isinstance(command, DownloaderServeCommand):
-        redis = Redis.from_url(command.redis_url, decode_responses=False)  # type: ignore[unreachable]
-        with Downloader(settings.download_dir, command.sleep_time, redis) as downloader:
-            downloader.serve()
+        nc = await nats.connect(command.nats_url)
+        js = nc.jetstream()
+        downloader = Downloader(settings.download_dir, command.sleep_time, js)
+        await downloader.__post_init__()
+        await downloader.serve()
+        await nc.close()
     elif isinstance(command, DownloaderProcessCommand):
-        # Allow to use file:// URLs in the downloader
-        session = requests.Session()  # type: ignore[unreachable]
+        session = requests.Session()
         session.mount("file://", FileAdapter())
 
         task = prepare_task(command, session)
-        with Downloader(settings.download_dir) as downloader:
-            downloader.session = session
-            downloader.process_task(task)
+        downloader = Downloader(settings.download_dir)
+        downloader.session = session
+        downloader.process_task(task)
 
 
 if __name__ == "__main__":

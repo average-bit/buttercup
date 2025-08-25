@@ -20,7 +20,7 @@ from buttercup.patcher.agents.reflection import ReflectionAgent
 from buttercup.patcher.agents.input_processing import InputProcessingAgent
 from buttercup.patcher.utils import PatchOutput
 from buttercup.common.llm import get_langfuse_callbacks
-from redis import Redis
+from nats.js.client import JetStreamContext
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ RECURSION_LIMIT = 200
 class PatcherLeaderAgent(PatcherAgentBase):
     """LLM-based Patcher Agent."""
 
-    redis: Redis | None
+    jetstream: JetStreamContext | None
     work_dir: Path
     tasks_storage: Path
     model_name: str | None = None
@@ -41,7 +41,7 @@ class PatcherLeaderAgent(PatcherAgentBase):
         swe_agent = SWEAgent(self.challenge, self.input, chain_call=self.chain_call)
         qe_agent = QEAgent(self.challenge, self.input, chain_call=self.chain_call)
         context_retriever_agent = ContextRetrieverAgent(
-            self.challenge, self.input, chain_call=self.chain_call, redis=self.redis
+            self.challenge, self.input, chain_call=self.chain_call, jetstream=self.jetstream
         )
         reflection_agent = ReflectionAgent(self.challenge, self.input, chain_call=self.chain_call)
         input_processing_agent = InputProcessingAgent(self.challenge, self.input, chain_call=self.chain_call)
@@ -62,13 +62,13 @@ class PatcherLeaderAgent(PatcherAgentBase):
         workflow.add_node(PatcherAgentName.RUN_POV.value, qe_agent.run_pov_node)
         workflow.add_node(PatcherAgentName.RUN_TESTS.value, qe_agent.run_tests_node)
         workflow.add_node(PatcherAgentName.REFLECTION.value, reflection_agent.reflect_on_patch)
-        workflow.add_node(PatcherAgentName.CONTEXT_RETRIEVER.value, context_retriever_agent.retrieve_context)  # type: ignore[call-overload]
+        workflow.add_node(PatcherAgentName.CONTEXT_RETRIEVER.value, context_retriever_agent.retrieve_context)
         workflow.add_node(PatcherAgentName.PATCH_VALIDATION.value, qe_agent.validate_patch_node)
 
         workflow.set_entry_point(PatcherAgentName.INPUT_PROCESSING.value)
         return workflow
 
-    def run_patch_task(self) -> PatchOutput | None:
+    async def run_patch_task(self) -> PatchOutput | None:
         """Run the patching task."""
         patch_team = self._init_patch_team()
         llm_callbacks = get_langfuse_callbacks()
@@ -103,7 +103,7 @@ class PatcherLeaderAgent(PatcherAgentBase):
                     },
                 )
 
-                output_state_dict: dict = chain.invoke(state)
+                output_state_dict: dict = await chain.ainvoke(state)
                 output_state = PatcherAgentState(**output_state_dict)
                 output_state.clean_built_challenges()
                 return output_state.get_successful_patch()

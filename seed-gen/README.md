@@ -15,7 +15,7 @@ The seed generation system operates in three main modes:
 ```mermaid
 graph TB
     subgraph "External Systems"
-        Redis[(Redis Queue)]
+        Redis[(NATS Queue)]
         CodeQuery[(CodeQuery Database)]
         ChallengeTask[(Challenge Task)]
     end
@@ -163,7 +163,7 @@ flowchart TD
 ### 1. SeedGenBot
 The main orchestrator that:
 - Manages task scheduling and prioritization
-- Handles Redis queue communication
+- Handles NATS queue communication
 - Implements task probability distributions
 - Ensures minimum task execution counts
 
@@ -241,7 +241,7 @@ The system is configured through environment variables and command-line argument
 
 ```yaml
 # Server Configuration
-redis_url: "redis://127.0.0.1:6379"
+nats_url: "nats://127.0.0.1:4222"
 corpus_root: "/path/to/corpus"
 sleep_time: 5
 max_corpus_seed_size: 65536  # 64 KiB
@@ -259,7 +259,7 @@ task_type: "seed-init|seed-explore|vuln-discovery"
 
 ### Server Mode
 ```bash
-seed-gen server --redis-url redis://localhost:6379 --corpus-root /path/to/corpus
+seed-gen server --nats-url nats://localhost:4222 --corpus-root /path/to/corpus
 ```
 
 ### Process Mode

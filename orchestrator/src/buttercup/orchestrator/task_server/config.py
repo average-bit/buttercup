@@ -6,7 +6,7 @@ from pydantic_settings import CliImplicitFlag
 
 class TaskServerSettings(BaseSettings):
     # Server configuration
-    redis_url: Annotated[str, Field(default="redis://localhost:6379", description="Redis URL")]
+    nats_url: Annotated[str, Field(default="nats://localhost:4222", description="NATS URL")]
     log_level: Annotated[str, Field(default="info", description="Log level")]
     log_max_line_length: Annotated[int | None, Field(default=None, description="Log max line length")]
     host: Annotated[str, Field(default="127.0.0.1", description="Host")]

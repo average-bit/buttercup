@@ -1,19 +1,19 @@
 from buttercup.common.logger import setup_package_logger
-from buttercup.common.maps import (
-    BuildMap,
-    HarnessWeights,
+from buttercup.common.nats_datastructures import (
+    NatsBuildMap,
+    NatsHarnessWeights,
 )
 from buttercup.common.datastructures.msg_pb2 import (
     BuildOutput,
     BuildType,
     WeightedHarness,
     SubmissionEntry,
-    SubmissionResult,
 )
-from buttercup.common.queues import QueueFactory, QueueNames, ReliableQueue
-from buttercup.common.task_registry import TaskRegistry
+from buttercup.common.nats_queues import NatsQueueFactory, QueueNames, NatsQueue, GroupNames
 from uuid import uuid4
-from redis import Redis
+import nats
+from nats.js.client import JetStreamContext
+from nats.aio.client import Client as NATS
 from pydantic_settings import BaseSettings, CliSubCommand, CliPositionalArg, get_subcommand
 from pydantic import BaseModel
 from typing import Annotated
@@ -21,6 +21,7 @@ from pydantic import Field
 from pathlib import Path
 from google.protobuf.text_format import Parse
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,12 @@ class TaskResult(BaseModel):
 
 def truncate_stacktraces(submission: SubmissionEntry, max_length: int = 80) -> SubmissionEntry:
     """Create a copy of the submission with truncated stacktraces for display purposes."""
-    # Create a new submission and copy the fields manually to ensure proper truncation
     from google.protobuf import text_format
 
-    # Serialize to text and then parse back to create a proper copy
     submission_text = text_format.MessageToString(submission)
     truncated_submission = SubmissionEntry()
     text_format.Parse(submission_text, truncated_submission)
 
-    # Now truncate the stacktraces and crash token
     for crash_with_id in truncated_submission.crashes:
         crash = crash_with_id.crash
         if crash.crash.stacktrace and len(crash.crash.stacktrace) > max_length:
@@ -109,11 +107,10 @@ class AddBuildSettings(BaseModel):
 
 class DeleteSettings(BaseModel):
     queue_name: CliPositionalArg[str] = Field(description="Queue name (one of " + ", ".join(get_queue_names()) + ")")
-    item_id: Annotated[str | None, Field(description="Item ID")] = None
 
 
 class Settings(BaseSettings):
-    redis_url: Annotated[str, Field(default="redis://localhost:6379", description="Redis URL")]
+    nats_url: Annotated[str, Field(default="nats://localhost:4222", description="NATS URL")]
     log_level: Annotated[str, Field(default="info", description="Log level")]
     send_queue: CliSubCommand[SendSettings]
     read_queue: CliSubCommand[ReadSettings]
@@ -134,14 +131,14 @@ class Settings(BaseSettings):
         extra = "allow"
 
 
-def handle_subcommand(redis: Redis, command: BaseModel | None) -> None:
+async def handle_subcommand(nats_client: NATS, jetstream: JetStreamContext, command: BaseModel | None) -> None:
     if command is None:
         return
 
     if isinstance(command, SendSettings):
         try:
             queue_name = QueueNames(command.queue_name)
-            queue: ReliableQueue = QueueFactory(redis).create(queue_name)
+            queue: NatsQueue = NatsQueueFactory(nats_client, jetstream).create(queue_name)
         except Exception as e:
             logger.exception(f"Failed to create queue: {e}")
             return
@@ -150,19 +147,16 @@ def handle_subcommand(redis: Redis, command: BaseModel | None) -> None:
         logger.info(f"Reading {msg_builder().__class__.__name__} message from file '{command.msg_path}'")
         msg = Parse(command.msg_path.read_text(), msg_builder())
         logger.info(f"Pushing message to queue '{command.queue_name}': {msg}")
-        queue.push(msg)
+        await queue.push(msg)
     elif isinstance(command, ReadSettings):
         queue_name = QueueNames(command.queue_name)
-        tmp_queue: ReliableQueue = QueueFactory(redis).create(queue_name)
-        queue = ReliableQueue(
-            redis,
-            command.queue_name,
-            tmp_queue.msg_builder,
-            group_name="msg_publisher" + str(uuid4()) if command.group_name is None else command.group_name,
-        )
+        group_name_str = "msg_publisher" + str(uuid4()) if command.group_name is None else command.group_name
+        group_name = GroupNames(group_name_str)
+        queue_with_group: NatsQueue = NatsQueueFactory(nats_client, jetstream).create(queue_name, group_name=group_name)
+        await queue_with_group.init_consumer()
 
         while True:
-            item = queue.pop()
+            item = await queue_with_group.pop()
             if item is None:
                 break
 
@@ -171,145 +165,45 @@ def handle_subcommand(redis: Redis, command: BaseModel | None) -> None:
 
         logger.info("Done")
     elif isinstance(command, DeleteSettings):
-        if command.item_id is None:
-            redis.delete(command.queue_name)
-            logger.info(f"Deleted all items from queue '{command.queue_name}'")
-        else:
-            redis.xdel(command.queue_name, command.item_id)
-            logger.info(f"Deleted item {command.item_id} from queue '{command.queue_name}'")
+        await jetstream.delete_stream(name=command.queue_name)
+        logger.info(f"Deleted stream '{command.queue_name}'")
     elif isinstance(command, AddHarnessWeightSettings):
         msg = Parse(command.msg_path.read_text(), WeightedHarness())
-        HarnessWeights(redis).push_harness(msg)
+        await NatsHarnessWeights(jetstream).set(f"{msg.task_id}_{msg.harness_name}", msg)
         logger.info(f"Added harness weight for {msg.package_name} | {msg.harness_name} | {msg.task_id}")
     elif isinstance(command, AddBuildSettings):
         msg = Parse(command.msg_path.read_text(), BuildOutput())
-        BuildMap(redis).add_build(msg)
+        await NatsBuildMap(jetstream).set_build(msg.task_id, msg.build_type, msg)
         logger.info(f"Added build for {msg.task_id} | {BuildType.Name(msg.build_type)} | {msg.sanitizer}")
     elif isinstance(command, ReadHarnessWeightSettings):
-        for harness in HarnessWeights(redis).list_harnesses():
+        for harness in await NatsHarnessWeights(jetstream).list_harnesses():
             print(harness)
         logger.info("Done")
     elif isinstance(command, ReadBuildsSettings):
-        # NOTE(boyan): we get the build type from the enum name and not value. This allows
-        # the CLI interface to use "FUZZER", "COVERAGE", etc, in the command line instead of
-        # the real int values that are meaningless.
         build_type = BuildType.Value(command.build_type)
-        for build in BuildMap(redis).get_builds(command.task_id, build_type):
+        for build in await NatsBuildMap(jetstream).get_builds(command.task_id, build_type):
             print(build)
         logger.info("Done")
     elif isinstance(command, ReadSubmissionsSettings):
-        # Read submissions from Redis using the same key as the Submissions class
-        SUBMISSIONS_KEY = "submissions"
-        raw_submissions: list = redis.lrange(SUBMISSIONS_KEY, 0, -1)
-        registry = TaskRegistry(redis)
-
-        if not raw_submissions:
-            logger.info("No submissions found")
-            return
-
-        logger.info(f"Found {len(raw_submissions)} submissions:")
-        result: dict[TaskId, TaskResult] = {}
-        for i, raw in enumerate(raw_submissions):
-            try:
-                submission = SubmissionEntry.FromString(raw)
-                # Apply stacktrace truncation unless verbose mode is enabled
-                if not command.verbose:
-                    submission = truncate_stacktraces(submission)
-
-                if command.filter_stop:
-                    if submission.stop:
-                        logger.info(f"Skipping stopped submission {i}")
-                        continue
-
-                task_id = submission.crashes[0].crash.crash.target.task_id
-                task = registry.get(task_id)
-                if task is None:
-                    logger.error(f"Task {task_id} not found in registry")
-                    continue
-
-                if task_id not in result:
-                    result[task_id] = TaskResult(
-                        task_id=task_id, project_name=task.project_name, mode=str(task.task_type)
-                    )
-                c = next((c for c in submission.crashes if c.result == SubmissionResult.PASSED), None)
-                if c:
-                    result[task_id].n_vulnerabilities += 1
-
-                p = next((p for p in submission.patches if p.result == SubmissionResult.PASSED), None)
-                if p:
-                    result[task_id].n_patches += 1
-                    assert c is not None
-                    result[task_id].patched_vulnerabilities.append(c.competition_pov_id)
-                else:
-                    if c:
-                        result[task_id].non_patched_vulnerabilities.append(c.competition_pov_id)
-
-                b = next((b for b in submission.bundles), None)
-                if b:
-                    result[task_id].n_bundles += 1
-
-                print(f"--- Submission {i} ---")
-                print(submission)
-                print()
-            except Exception as e:
-                logger.error(f"Failed to parse submission {i}: {e}")
-
-        print()
-        print()
-        print()
-        print("Summary:")
-
-        total_vulnerabilities = sum(task_result.n_vulnerabilities for task_result in result.values())
-        total_patches = sum(task_result.n_patches for task_result in result.values())
-        total_task_vuln = sum(1 for tr in result.values() if tr.n_vulnerabilities > 0)
-        print(f"Total vulnerabilities across all tasks: {total_vulnerabilities}")
-        print(f"Total patches across all tasks: {total_patches}")
-        print(f"N of at least 1 vuln in a challenge: {total_task_vuln}")
-        print()
-
-        for task_id, task_result in result.items():
-            print(f"Task {task_id}:")
-            print(f"  Project: {task_result.project_name}")
-            print(f"  Mode: {task_result.mode}")
-            print(f"  N vulnerabilities: {task_result.n_vulnerabilities}")
-            print(f"  N patches: {task_result.n_patches}")
-            print(f"  N bundles: {task_result.n_bundles}")
-            print(f"  Patched vulnerabilities: {task_result.patched_vulnerabilities}")
-            print(f"  Non-patched vulnerabilities: {task_result.non_patched_vulnerabilities}")
-            print()
-
-        print()
-        print()
-        print()
-        print("Non-patched vulnerabilities across all tasks:")
-        all_non_patched: list[tuple[str, str, str]] = []
-        for task_id, task_result in result.items():
-            all_non_patched.extend(
-                (task_result.project_name, task_result.task_id, vuln_id)
-                for vuln_id in task_result.non_patched_vulnerabilities
-            )
-
-        if all_non_patched:
-            for project_name, task_id, vuln_id in all_non_patched:
-                print(f"  {project_name} | {task_id} | {vuln_id}")
-        else:
-            print("  None")
-
-        print()
-        logger.info("Done")
+        # This command is not supported with NATS as it requires direct access to the underlying data store.
+        # The user should use the nats CLI to inspect the contents of the submissions stream.
+        logger.error("Reading submissions is not supported with NATS.")
+        logger.info("Use the nats CLI to inspect the contents of the submissions stream.")
     elif isinstance(command, ListSettings):
         print("Available queues:")
         print("\n".join([f"- {name}" for name in get_queue_names()]))
 
 
-def main() -> None:
+async def main() -> None:
     settings = Settings()
     setup_package_logger("util-cli", __name__, settings.log_level)
 
-    redis = Redis.from_url(settings.redis_url, decode_responses=False)
+    nc = await nats.connect(settings.nats_url)
+    js = nc.jetstream()
     command = get_subcommand(settings)
-    handle_subcommand(redis, command)
+    await handle_subcommand(nc, js, command)
+    await nc.close()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

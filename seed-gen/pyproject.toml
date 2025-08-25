@@ -7,7 +7,7 @@ authors = [
     { name = "Trail of Bits", email = "opensource@trailofbits.com" },
 ]
 dependencies = [
-    "redis ~= 5.2.1",
+    "nats-py>=2.8.0",
     "common",
     "wasmtime ~= 29.0.0",
     "program-model",
@@ -36,7 +36,6 @@ dev = [
     "pytest ~= 8.3.4",
     "ruff ~= 0.6.2",
     "tqdm ~= 4.67.1",
-    "types-redis",
 ]
 
 [project.scripts]
