@@ -65,31 +65,26 @@ git clone --recurse-submodules https://github.com/trailofbits/buttercup.git
 cd buttercup
 ```
 
-2. Run automated setup (Recommended)
+2. Run the automated setup and deployment script:
 
 ```bash
-make setup-local
+./run-local.sh
 ```
 
-This script will install all dependencies, configure the environment, and guide you through the setup process.
+This script will check for dependencies, guide you through setting API keys, and deploy the entire Buttercup system to a local Minikube cluster.
 
 **Note:** If you prefer manual setup, see the [Manual Setup Guide](MANUAL_SETUP.md).
 
-3. Start Buttercup locally
+3. Verify local deployment:
 
-```bash
-make deploy-local
-```
-
-4. Verify local deployment:
-
+After the script completes, you can verify the deployment by running:
 ```bash
 make status
 ```
 
 When a deployment is successful, you should see all pods in "Running" or "Completed" status.
 
-5. Send Buttercup a simple task
+4. Send Buttercup a simple task
 
 **Note:** When tasked, Buttercup will start consuming third-party AI resources.
 
