@@ -80,5 +80,5 @@ Timeouts
 
 OOMs
 
-  * We set `fuzzer-bot` and `tracer-bot` to have at least `4Gi` of memory during `minikube` testing.
+  * We set `fuzzer-bot` and `tracer-bot` to have at least `4Gi` of memory during `k3s` testing.
   * We acknowledge that a fuzzing harness can specify `-rss_limit_mb=0` to disable memory limits, but these cases will likely be few and far between (upon examining the projects under oss-fuzz), and if it does get killed due to memory limitations, then our stacktrace will be empty and we can simply ignore and move on.

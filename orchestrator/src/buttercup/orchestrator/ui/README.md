@@ -42,7 +42,7 @@ The UI is configured via environment variables (with the `BUTTERCUP_UI_` prefix)
 
 - `BUTTERCUP_UI_HOST`: Host to bind the server (default: `127.0.0.1`)
 - `BUTTERCUP_UI_PORT`: Port to bind the server (default: `1323`)
-- `BUTTERCUP_UI_EXTERNAL_HOST`: Host used by external components to access the API (e.g. `buttercup-ui` in minikube)
+- `BUTTERCUP_UI_EXTERNAL_HOST`: Host used by external components to access the API (e.g. `buttercup-ui` in k3s)
 - `BUTTERCUP_UI_STORAGE_DIR`: Directory for storing tarballs and artifacts (default: `/tmp/buttercup-storage`)
 - `BUTTERCUP_UI_CRS_BASE_URL`: CRS API base URL (default: `http://localhost:8080`)
 - `BUTTERCUP_UI_CRS_KEY_ID` / `BUTTERCUP_UI_CRS_KEY_TOKEN`: CRS authentication (optional)

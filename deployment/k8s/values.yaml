@@ -1,7 +1,7 @@
 # Global values available to all charts
 global:
-  # Set environment: "minikube" or "aks"
-  environment: "minikube"
+  # Set environment: "k3s" or "aks"
+  environment: "k3s"
   logMaxLineLength: 10240
   orchestratorImage:
     repository: ghcr.io/trailofbits/buttercup/buttercup-orchestrator

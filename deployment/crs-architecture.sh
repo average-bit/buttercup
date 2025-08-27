@@ -38,7 +38,7 @@ fi
 BUTTERCUP_NAMESPACE=${BUTTERCUP_NAMESPACE:-crs}
 DEPLOY_CLUSTER=${DEPLOY_CLUSTER:-true}
 DEPLOY_SIGNOZ=${DEPLOY_SIGNOZ:-false}
-CLUSTER_TYPE=${CLUSTER_TYPE:-minikube}
+CLUSTER_TYPE=${CLUSTER_TYPE:-k3s}
 
 if [ "$DEPLOY_CLUSTER" = "true" ] && [ "$CLUSTER_TYPE" = "aks" ]; then
 	echo -e "${GRN}Current azure account status:${NC}"
@@ -86,27 +86,15 @@ up() {
 
 				az aks get-credentials --resource-group "$RESOURCE_GROUP_NAME" --name "$KUBERNETES_CLUSTER_NAME"
 				;;
-			*)
-				echo -e "${BLU}Deploying minikube cluster${NC}"
-				# Minikube defaults
-				MINIKUBE_CPU="${MINIKUBE_CPU:-6}"
-				MINIKUBE_MEMORY_GB="${MINIKUBE_MEMORY_GB:-10}"
-				MINIKUBE_DISK_GB="${MINIKUBE_DISK_GB:-80}"
-
-				echo -e "${BLU}Using Minikube configuration: CPU=${MINIKUBE_CPU}, Memory=${MINIKUBE_MEMORY_GB}GB, Disk=${MINIKUBE_DISK_GB}GB${NC}"
-				minikube status | grep -q "kubelet: Running" || minikube start \
-					--force \
-					--extra-config=kubeadm.skip-phases=preflight \
-					--cpus="${MINIKUBE_CPU}" \
-					--memory="${MINIKUBE_MEMORY_GB}g" \
-					--disk-size="${MINIKUBE_DISK_GB}g" \
-					--driver=docker \
-					--kubernetes-version=stable
-				echo -e "${GRN}Minikube cluster status:${NC}"
-				minikube status
+			"k3s")
+				echo -e "${BLU}Using k3s for local deployment${NC}"
+				echo -e "${BLU}Ensuring k3s service is running...${NC}"
+				sudo systemctl is-active --quiet service k3s || sudo systemctl start k3s
+				echo -e "${GRN}k3s is running.${NC}"
 
 				echo -e "${BLU}Building local docker images${NC}"
-				eval $(minikube docker-env)
+				# With k3s, we don't need to switch docker-env.
+				# The system relies on a local registry that k3s can access.
 
 				# Authenticate with GitHub Container Registry for Docker builds
 				if [ -n "$GHCR_AUTH" ]; then
@@ -233,8 +221,8 @@ down() {
 				echo -e "${BLU}Destroying AKS cluster${NC}"
 				terraform apply -destroy -auto-approve
 				;;
-			*)
-				minikube stop
+			"k3s")
+				sudo /usr/local/bin/k3s-killall.sh
 				;;
 		esac
 	fi
@@ -255,8 +243,8 @@ down-k8s() {
 
 				az aks get-credentials --resource-group "$RESOURCE_GROUP_NAME" --name "$KUBERNETES_CLUSTER_NAME"
 				;;
-			*)
-				kubectl config use-context minikube
+			"k3s")
+				# No context switch needed for k3s, it's the default
 				;;
 		esac
 	fi

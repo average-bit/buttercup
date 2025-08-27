@@ -78,19 +78,6 @@ install_docker() {
     print_success "Docker buildx plugin installed"
 }
 
-# Function to install kubectl
-install_kubectl() {
-    print_status "Installing kubectl..."
-    if ! command_exists kubectl; then
-        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-        sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-        rm kubectl
-        print_success "kubectl installed successfully"
-    else
-        print_success "kubectl is already installed"
-    fi
-}
-
 # Function to install Helm
 install_helm() {
     print_status "Installing Helm..."
@@ -105,16 +92,15 @@ install_helm() {
     fi
 }
 
-# Function to install Minikube
-install_minikube() {
-    print_status "Installing Minikube..."
-    if ! command_exists minikube; then
-        curl -LO https://github.com/kubernetes/minikube/releases/latest/download/minikube-linux-amd64
-        sudo install minikube-linux-amd64 /usr/local/bin/minikube
-        rm minikube-linux-amd64
-        print_success "Minikube installed successfully"
+# Function to install k3s
+install_k3s() {
+    print_status "Installing k3s..."
+    if ! command_exists k3s; then
+        curl -sfL https://get.k3s.io | sh -
+        print_success "k3s installed successfully"
+        print_warning "You may need to run 'sudo chmod 644 /etc/rancher/k3s/k3s.yaml' to make the kubeconfig readable by non-root users."
     else
-        print_success "Minikube is already installed"
+        print_success "k3s is already installed"
     fi
 }
 
@@ -170,17 +156,18 @@ check_helm() {
     fi
 }
 
-# Function to check Minikube
-check_minikube() {
-    print_status "Checking Minikube..."
-    if command_exists minikube; then
-        if minikube status >/dev/null 2>&1; then
-            print_success "Minikube is running"
+# Function to check k3s
+check_k3s() {
+    print_status "Checking k3s..."
+    if command_exists k3s; then
+        if sudo k3s kubectl get node >/dev/null 2>&1; then
+            print_success "k3s is running"
         else
-            print_warning "Minikube is installed but not running"
+            print_error "k3s is installed but not running correctly"
+            return 1
         fi
     else
-        print_warning "Minikube is not installed (only needed for local development)"
+        print_warning "k3s is not installed (only needed for local development)"
     fi
 }
 

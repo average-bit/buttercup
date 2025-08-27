@@ -4,7 +4,7 @@ This guide explains how to set up and run the Buttercup system on Kubernetes.
 
 ## Prerequisites
 
-- Kubernetes cluster (Minikube for local development or AKS for production)
+- Kubernetes cluster (k3s for local development or AKS for production)
 - kubectl configured to communicate with your cluster
 - Helm v3
 - Access to container registries (ghcr.io)
@@ -13,7 +13,7 @@ This guide explains how to set up and run the Buttercup system on Kubernetes.
 ## Environment Configuration
 
 The Buttercup system can be deployed in two environments:
-- `minikube`: Local development environment
+- `k3s`: Local development environment
 - `aks`: Azure Kubernetes Service for production deployment
 
 This is controlled via the `global.environment` setting in the values.yaml or values-override.yaml file.
@@ -22,9 +22,9 @@ This is controlled via the `global.environment` setting in the values.yaml or va
 
 1. **Create a values-override.yaml file with your secrets:**
    ```yaml
-   # Environment selection (minikube or aks)
+   # Environment selection (k3s or aks)
    global:
-     environment: "minikube"  # or "aks" for production
+     environment: "k3s"  # or "aks" for production
 
      # Langfuse configuration
      langfuse:
@@ -104,7 +104,7 @@ kubectl create secret generic ghcr \
 The Buttercup system consists of several microservices:
 
 1. **Core Infrastructure**:
-   - **Redis**: Message broker and task queue
+   - **NATS**: Message broker and task queue
    - **PostgreSQL**: Database for LiteLLM
    - **LiteLLM**: LLM proxy for all AI model interactions
 

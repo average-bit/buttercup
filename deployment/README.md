@@ -24,7 +24,7 @@ The standard `azure` networking profile is used.
 - An active Azure subscription.
 - An account in Azure Entra ID.
 - Access credentials to the competition Tailscale tailnet.
-- Minikube installed, if you want to test the full CRS locally (linux/amd64 system recommended).
+- k3s installed, if you want to test the full CRS locally (linux/amd64 system recommended).
 
 ### Azure
 

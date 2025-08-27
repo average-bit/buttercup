@@ -51,7 +51,7 @@ spec:
       volumes:
         - name: data-volume
           emptyDir: {}
-        {{- if eq .Values.global.environment "minikube" }}
+        {{- if eq .Values.global.environment "k3s" }}
         - name: run-data-volume
           hostPath:
             path: /data/{{ .Release.Name }}-run-data

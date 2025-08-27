@@ -50,9 +50,8 @@ verify_setup() {
 
 install_linux() {
     install_docker
-    install_kubectl
     install_helm
-    install_minikube
+    install_k3s
     install_git_lfs
 }
 
@@ -83,12 +82,12 @@ install_helm_mac() {
     fi
 }
 
-install_minikube_mac() {
-    if command_exists minikube; then
-        print_success "Minikube is already installed"
+install_k3s_mac() {
+    if command_exists k3s; then
+        print_success "k3s is already installed"
     else
-        print_status "Installing Minikube..."
-        brew install minikube
+        print_status "Installing k3s..."
+        brew install k3s
     fi
 }
 
@@ -105,7 +104,7 @@ install_macos() {
     check_brew
     install_docker_mac
     install_helm_mac
-    install_minikube_mac
+    install_k3s_mac
     install_git_lfs_mac
 }
 

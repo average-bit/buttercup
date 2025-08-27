@@ -25,7 +25,7 @@ main() {
     check_docker || total_errors=$((total_errors + 1))
     check_kubectl || total_errors=$((total_errors + 1))
     check_helm || total_errors=$((total_errors + 1))
-    check_minikube
+    check_k3s
     check_azure_cli
     check_terraform
     echo

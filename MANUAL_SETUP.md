@@ -30,24 +30,20 @@ sudo usermod -aG docker $USER
 # Log out and back in for group changes to take effect
 ```
 
-### kubectl
-
-```bash
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-```
-
 ### Helm
 
 ```bash
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ```
 
-### Minikube
+### k3s
+
+`k3s` is a lightweight Kubernetes distribution that will be used for local deployment. It also includes `kubectl`.
 
 ```bash
-curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-sudo install minikube-linux-amd64 /usr/local/bin/minikube
+curl -sfL https://get.k3s.io | sh -
+# Make kubeconfig readable by the current user
+sudo chmod 644 /etc/rancher/k3s/k3s.yaml
 ```
 
 ### Git LFS (for some tests)
@@ -119,11 +115,14 @@ sudo usermod -aG docker $USER
 # Log out and back in
 ```
 
-2. **Minikube won't start:**
+2. **k3s won't start:**
 
 ```bash
-minikube delete
-minikube start --driver=docker
+# Check the k3s service status
+sudo systemctl status k3s
+
+# Restart the k3s service
+sudo systemctl restart k3s
 ```
 
 3. **Helm chart issues:**

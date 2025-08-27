@@ -13,7 +13,7 @@ help:
 	@echo ""
 	@echo "Deployment:"
 	@echo "  deploy            - Deploy to current environment (local or azure)"
-	@echo "  deploy-local      - Deploy to local Minikube environment"
+	@echo "  deploy-local      - Deploy to local k3s environment"
 	@echo "  deploy-azure      - Deploy to production AKS environment"
 	@echo ""
 	@echo "Status:"
@@ -33,7 +33,7 @@ help:
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  undeploy          - Remove deployment and clean up resources"
-	@echo "  clean-local       - Delete Minikube cluster and remove local config"
+	@echo "  clean-local       - Delete k3s cluster and remove local config"
 
 # Setup targets
 setup-local:
@@ -97,7 +97,7 @@ crs-instance-id:
 	echo "CRS instance ID: $$(kubectl get configmap -n $${BUTTERCUP_NAMESPACE:-crs} crs-instance-id -o jsonpath='{.data.crs-instance-id}')"
 
 deploy-local:
-	@echo "Deploying to local Minikube environment..."
+	@echo "Deploying to local k3s environment..."
 	@if [ ! -f deployment/env ]; then \
 		echo "Error: Configuration file not found. Run 'make setup-local' first."; \
 		exit 1; \
@@ -207,7 +207,7 @@ undeploy:
 
 clean-local:
 	@echo "Cleaning up local environment..."
-	minikube delete || true
+	/usr/local/bin/k3s-uninstall.sh || true
 	rm -f deployment/env
 
 # Additional targets migrated from justfile

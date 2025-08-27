@@ -73,16 +73,18 @@ docker-compose up -d
 docker-compose --profile fuzzer-test up
 ```
 
-### Minikube
+### k3s
 ```bash
-# Start/stop
-minikube start --driver=docker
-minikube stop
-minikube delete
+# Check status
+sudo k3s kubectl get node
+sudo systemctl status k3s
 
-# Status
-minikube status
-minikube dashboard
+# Start/stop service
+sudo systemctl start k3s
+sudo systemctl stop k3s
+
+# Uninstall k3s
+/usr/local/bin/k3s-uninstall.sh
 ```
 
 ### Azure AKS
@@ -104,15 +106,16 @@ az aks show --name <cluster-name> --resource-group <resource-group>
 
 ### Common Issues
 
-#### Minikube Issues
+#### k3s Issues
 ```bash
-# Reset minikube
-minikube delete
-minikube start --driver=docker
+# Check k3s service status
+sudo systemctl status k3s
 
-# Check status
-minikube status
-kubectl cluster-info
+# Restart k3s service
+sudo systemctl restart k3s
+
+# Check nodes
+sudo k3s kubectl get node
 ```
 
 #### Docker Issues

@@ -9,13 +9,13 @@ A list of vulnerabilities to find and patch is in this [spreadsheet](https://doc
 
 ## Setup
 
-* Set up minikube locally on your machine (see [README.md](README.md)).
+* Set up k3s locally on your machine (see [README.md](README.md)).
 
-* `cd deployment && make up`
+* `make deploy-local`
 
 * Wait for all components to be `Running`: `watch 'kubectl get pods -n crs'`
 
-* `kubectl port-forward -n crs service/buttercup-ui 31323:1323`
+* `make web-ui`
 
 ## Steps
 
@@ -69,28 +69,23 @@ python3 infra/helper.py build_fuzzers --clean --sanitizer address --engine libfu
 
 * `./orchestrator/scripts/challenge.py single lp_delta_01`
 
-* `kubectl port-forward -n crs service/buttercup-redis-master 16379:6379`
+* `kubectl port-forward -n crs service/buttercup-nats 4222:4222`
 
-* Access `redis` server
+* Access `nats` server using the `nats` CLI
 
-  * `cd common/`
-    * Note: need to run `uv venv` the first time and `uv sync` after changes have been made.
-  * `source .venv/bin/activate`
-  * `buttercup-util --help`
-
-  * `buttercup-util --redis_url redis://localhost:16379 list_queues`
-  * `buttercup-util --redis_url redis://localhost:16379 read_queue tasks_ready_queue`
+  * `nats --server nats://localhost:4222 stream ls`
+  * `nats --server nats://localhost:4222 stream view <stream-name>`
 
 ### Check if we found a Vulnerability and Patch
 
-* Check for crashes: `buttercup-util --redis_url redis://localhost:16379 read_queue confirmed_vulnerabilities_queue`
+* Check for crashes: `nats --server nats://localhost:4222 stream view confirmed_vulnerabilities_queue`
 
 * Copy crash input file:
-  * `buttercup-util --redis_url redis://localhost:16379 read_queue confirmed_vulnerabilities_queue | grep "crash_input_path"`
+  * Find the `crash_input_path` in the output of the command above.
   * `kubectl get pods -n crs | grep fuzzer`
   * `kubectl cp crs/<fuzzer-bot-name>:<crash-path> crash`
 
-* Check for patches: `buttercup-util --redis_url redis://localhost:16379 read_queue patches_queue`
+* Check for patches: `nats --server nats://localhost:4222 stream view patches_queue`
 
 * Copy patch file:
   * `buttercup-util --redis_url redis://localhost:16379 read_queue patches_queue | grep "patch:" > patch.diff`

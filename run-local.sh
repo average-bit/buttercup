@@ -34,7 +34,7 @@ check_prerequisites() {
     print_status "Checking for required command-line tools..."
     local missing_tools=0
 
-    local required_tools=("make" "git" "curl" "docker" "minikube" "kubectl" "uv")
+    local required_tools=("make" "git" "curl" "docker" "kubectl" "uv")
 
     for tool in "${required_tools[@]}"; do
         if ! command_exists "$tool"; then

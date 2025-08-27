@@ -71,7 +71,7 @@ cd buttercup
 ./run-local.sh
 ```
 
-This script will check for dependencies, guide you through setting API keys, and deploy the entire Buttercup system to a local Minikube cluster.
+This script will check for dependencies, guide you through setting API keys, and deploy the entire Buttercup system to a local k3s cluster.
 
 **Note:** If you prefer manual setup, see the [Manual Setup Guide](MANUAL_SETUP.md).
 

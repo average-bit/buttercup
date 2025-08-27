@@ -18,7 +18,7 @@ mountOptions:
 ---
 
 {{- if .Values.volumes.tasks_storage.enabled }}
-{{- if eq .Values.environment "minikube" }}
+{{- if eq .Values.environment "k3s" }}
 # For Minikube environment, create a hostPath PersistentVolume
 apiVersion: v1
 kind: PersistentVolume
@@ -55,7 +55,7 @@ spec:
 {{- end }}
 ---
 {{- if .Values.volumes.crs_scratch.enabled }}
-{{- if eq .Values.environment "minikube" }}
+{{- if eq .Values.environment "k3s" }}
 # For Minikube environment, create a hostPath PersistentVolume
 apiVersion: v1
 kind: PersistentVolume
@@ -93,7 +93,7 @@ spec:
 ---
 
 {{- if .Values.ui.enabled }}
-{{- if eq .Values.environment "minikube" }}
+{{- if eq .Values.environment "k3s" }}
 # For Minikube environment, create a hostPath PersistentVolume
 apiVersion: v1
 kind: PersistentVolume
